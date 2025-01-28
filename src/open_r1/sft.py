@@ -35,7 +35,7 @@ accelerate launch --config_file=configs/zero3.yaml src/open_r1/sft.py \
     --output_dir data/Qwen2.5-1.5B-Open-R1-Distill
 """
 
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer
 
 from trl import (
@@ -74,6 +74,7 @@ def main(script_args, training_args, model_args):
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    # dataset = load_from_disk(script_args.dataset_name)
 
     ################
     # Training
@@ -88,11 +89,22 @@ def main(script_args, training_args, model_args):
     )
 
     trainer.train()
+    
+    # Get stats
+    try:
+        import pandas as pd
+        df = pd.DataFrame(trainer.state.log_history)
+        print("Trainer State Log History:")
+        print(df)
+    except e:
+        print(f"[WARN] Failed to run custom `trainer.state.log_history`: {e}")
 
-    # Save and push to hub
+    # Save model locally
     trainer.save_model(training_args.output_dir)
-    if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name)
+    
+    # Absolutely not, lol. Leaving in to shame whoever included this.
+    # if training_args.push_to_hub:
+    #     trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
 if __name__ == "__main__":
