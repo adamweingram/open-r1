@@ -1,33 +1,56 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 #SBATCH --job-name=open-r1-sft
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
-#SBATCH --exclusive
-#SBATCH --gres=gpu:8
-#SBATCH --partition=hopper-prod 
+#SBATCH --cpus-per-task=50
+#SBATCH --mem-per-cpu=4G
+#SBATCH --gres=gpu:1
+#SBATCH --partition=A100 
 #SBATCH --output=./logs/%x-%j.out
-#SBATCH --err=./logs/%x-%j.err
+# #SBATCH --err=./logs/%x-%j.err
 
-set -x -e
+set -e -u -o pipefail
 
-source ~/.bashrc
-conda activate openr1
-module load cuda/12.1
+# source ~/.bashrc
+
+# Activate various environments
+spack env activate .
+source .venv/bin/activate
+python -c 'import trl'  # Sanity check
+
 echo "START TIME: $(date)"
 echo "PYTHON ENV: $(which python)"
 
-MODEL_PATH=$1
-DATASET_PATH=$2
-ACCELERATOR=$3
+set -x
+
+# MODEL_PATH=$1
+# DATASET_PATH=$2
+# ACCELERATOR=$3
+
+export MODEL_PATH="Qwen/Qwen2.5-Math-1.5B-Instruct"
+export DATASET_PATH="HuggingFaceH4/Bespoke-Stratos-17k"
+# export DATASET_PATH="$(realpath ../datasets/stratos)"
+export ACCELERATOR="double-a100"
+
+# Disable network access for annoying HF libraries
+# (mein got, why are they so poorly designed)
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1
+
+# Disable `wandb` (Weights and Balances); honestly, why is this needed!?
+# Note: Remove if issues arise.
+export WANDB_DISABLED=1
 
 # Training setup
-NUM_NODES=$SLURM_NNODES
-GPUS_PER_NODE=8
-WORLD_SIZE=$(($NUM_NODES*$GPUS_PER_NODE))
+export NUM_NODES=$SLURM_NNODES
+export GPUS_PER_NODE=1
+export WORLD_SIZE=$(($NUM_NODES*$GPUS_PER_NODE))
 
 # so processes know who to talk to
-MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
-MASTER_PORT=6000
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT=6000
 
 export CMD=" \
     src/open_r1/sft.py \
@@ -39,8 +62,8 @@ export CMD=" \
     --packing \
     --max_seq_length 4096 \
     --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 1 \
     --gradient_checkpointing \
     --bf16 \
     --logging_steps 5 \
@@ -65,15 +88,11 @@ export LAUNCHER="HF_HUB_ENABLE_HF_TRANSFER=1 ACCELERATE_LOG_LEVEL=info TRANSFORM
 
 # force crashing on nccl issues like hanging broadcast
 export NCCL_ASYNC_ERROR_HANDLING=1
-# export NCCL_DEBUG=INFO
+export NCCL_DEBUG=TRACE  # Usually INFO is good, but you can also comment it out completely
 # export NCCL_DEBUG_SUBSYS=COLL
 # export NCCL_SOCKET_NTHREADS=1
 # export NCCL_NSOCKS_PERTHREAD=1
 # export CUDA_LAUNCH_BLOCKING=1
-
-# Specific configuration optimized for the Hugging Face Compute Cluster
-# Be ye warned this may not work on other clusters!
-module load cuda/12.1
 
 # srun error handling:
 # --wait=60: wait 60 sec after the first task terminates before terminating all remaining tasks
@@ -84,5 +103,7 @@ SRUN_ARGS=" \
     "
 
 clear; srun $SRUN_ARGS --jobid $SLURM_JOB_ID bash -c "$LAUNCHER --role \$SLURMD_NODENAME: $CMD" 2>&1
+
+set +x
 
 echo "END TIME: $(date)"
